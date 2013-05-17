@@ -78,7 +78,7 @@ static int	audit_initialized;
 #define AUDIT_ON	1
 #define AUDIT_LOCKED	2
 int		audit_enabled;
-int		audit_ever_enabled;
+bool		audit_ever_enabled;
 
 EXPORT_SYMBOL_GPL(audit_enabled);
 
