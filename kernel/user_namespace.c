@@ -22,6 +22,7 @@
 #include <linux/ctype.h>
 #include <linux/projid.h>
 #include <linux/fs_struct.h>
+#include <linux/audit.h>
 
 static struct kmem_cache *user_ns_cachep __read_mostly;
 
@@ -124,6 +125,7 @@ void free_user_ns(struct user_namespace *ns)
 	do {
 		parent = ns->parent;
 		proc_free_inum(ns->proc_inum);
+		audit_free_user_ns(ns);
 		kmem_cache_free(user_ns_cachep, ns);
 		ns = parent;
 	} while (atomic_dec_and_test(&parent->count));

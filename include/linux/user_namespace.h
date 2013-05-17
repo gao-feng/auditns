@@ -17,6 +17,12 @@ struct uid_gid_map {	/* 64 bytes -- 1 cache line */
 	} extent[UID_GID_MAP_MAX_EXTENTS];
 };
 
+#ifdef CONFIG_AUDIT
+struct audit_ctrl {
+	struct sock		*sock;
+};
+#endif
+
 struct user_namespace {
 	struct uid_gid_map	uid_map;
 	struct uid_gid_map	gid_map;
@@ -26,6 +32,9 @@ struct user_namespace {
 	kuid_t			owner;
 	kgid_t			group;
 	unsigned int		proc_inum;
+#ifdef CONFIG_AUDIT
+	struct audit_ctrl	audit;
+#endif
 	bool			may_mount_sysfs;
 	bool			may_mount_proc;
 };

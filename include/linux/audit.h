@@ -439,6 +439,8 @@ extern int audit_log_task_context(struct audit_buffer *ab);
 extern void audit_log_task_info(struct audit_buffer *ab,
 				struct task_struct *tsk);
 
+extern void		    audit_free_user_ns(struct user_namespace *ns);
+
 extern int		    audit_update_lsm_rules(void);
 
 				/* Private API (for audit.c only) */
@@ -491,6 +493,9 @@ static inline int audit_log_task_context(struct audit_buffer *ab)
 }
 static inline void audit_log_task_info(struct audit_buffer *ab,
 				       struct task_struct *tsk)
+{ }
+
+static inline void audit_free_user_ns(struct user_namespace *ns)
 { }
 #define audit_enabled 0
 #endif /* CONFIG_AUDIT */

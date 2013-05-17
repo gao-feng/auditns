@@ -64,6 +64,7 @@
 #include <linux/freezer.h>
 #include <linux/tty.h>
 #include <linux/pid_namespace.h>
+#include <linux/user_namespace.h>
 
 #include "audit.h"
 
@@ -119,9 +120,6 @@ u32		audit_sig_sid = 0;
    4) suppressed due to audit_backlog_limit
 */
 static atomic_t    audit_lost = ATOMIC_INIT(0);
-
-/* The netlink socket. */
-static struct sock *audit_sock;
 
 /* Hash for inode-based rules */
 struct list_head audit_inode_hash[AUDIT_INODE_BUCKETS];
@@ -385,7 +383,8 @@ static void kauditd_send_skb(struct sk_buff *skb)
 	int err;
 	/* take a reference in case we can't send it and we want to hold it */
 	skb_get(skb);
-	err = netlink_unicast(audit_sock, skb, audit_nlk_portid, 0);
+	err = netlink_unicast(init_user_ns.audit.sock, skb,
+			      audit_nlk_portid, 0);
 	if (err < 0) {
 		BUG_ON(err != -ECONNREFUSED); /* Shouldn't happen */
 		printk(KERN_ERR "audit: *NO* daemon at audit_pid=%d\n", audit_pid);
@@ -417,7 +416,7 @@ static void flush_hold_queue(void)
 {
 	struct sk_buff *skb;
 
-	if (!audit_default || !audit_pid)
+	if (!audit_default || !audit_pid || !init_user_ns.audit.sock)
 		return;
 
 	skb = skb_dequeue(&audit_skb_hold_queue);
@@ -449,7 +448,7 @@ static int kauditd_thread(void *dummy)
 		skb = skb_dequeue(&audit_skb_queue);
 		wake_up(&audit_backlog_wait);
 		if (skb) {
-			if (audit_pid)
+			if (audit_pid && init_user_ns.audit.sock)
 				kauditd_send_skb(skb);
 			else
 				audit_printk_skb(skb);
@@ -479,8 +478,11 @@ int audit_send_list(void *_dest)
 	mutex_lock(&audit_cmd_mutex);
 	mutex_unlock(&audit_cmd_mutex);
 
+	if (!init_user_ns.audit.sock)
+		return 0;
+
 	while ((skb = __skb_dequeue(&dest->q)) != NULL)
-		netlink_unicast(audit_sock, skb, pid, 0);
+		netlink_unicast(init_user_ns.audit.sock, skb, pid, 0);
 
 	kfree(dest);
 
@@ -521,7 +523,8 @@ static int audit_send_reply_thread(void *arg)
 
 	/* Ignore failure. It'll only happen if the sender goes away,
 	   because our timeout is set to infinite. */
-	netlink_unicast(audit_sock, reply->skb, reply->pid, 0);
+	netlink_unicast(init_user_ns.audit.sock, reply->skb,
+			reply->pid, 0);
 	kfree(reply);
 	return 0;
 }
@@ -538,16 +541,21 @@ static int audit_send_reply_thread(void *arg)
  * Allocates an skb, builds the netlink message, and sends it to the pid.
  * No failure notifications.
  */
-static void audit_send_reply(int pid, int seq, int type, int done, int multi,
-			     const void *payload, int size)
+static int audit_send_reply(int pid, int seq, int type, int done, int multi,
+			    const void *payload, int size)
 {
+	int ret = -ECONNREFUSED;
 	struct sk_buff *skb;
 	struct task_struct *tsk;
-	struct audit_reply *reply = kmalloc(sizeof(struct audit_reply),
-					    GFP_KERNEL);
+	struct audit_reply *reply;
 
+	if (!current_user_ns()->audit.sock)
+		return ret;
+
+	ret = -ENOMEM;
+	reply = kmalloc(sizeof(struct audit_reply), GFP_KERNEL);
 	if (!reply)
-		return;
+		return ret;
 
 	skb = audit_make_reply(pid, seq, type, done, multi, payload, size);
 	if (!skb)
@@ -558,10 +566,11 @@ static void audit_send_reply(int pid, int seq, int type, int done, int multi,
 
 	tsk = kthread_run(audit_send_reply_thread, reply, "audit_send_reply");
 	if (!IS_ERR(tsk))
-		return;
+		return 0;
 	kfree_skb(skb);
 out:
 	kfree(reply);
+	return ret;
 }
 
 /*
@@ -886,24 +895,56 @@ static void audit_receive(struct sk_buff  *skb)
 	mutex_unlock(&audit_cmd_mutex);
 }
 
+static int __net_init audit_net_init(struct net *net)
+{
+	struct user_namespace *ns = net->user_ns;
+
+	if (!ns->audit.sock) {
+		struct sock *sk = NULL;
+		/*
+		 * create kernel side netlink socket for audit,
+		 * make audit sock per user namespace.
+		 */
+		struct netlink_kernel_cfg cfg = {
+			.input	= audit_receive,
+		};
+
+		sk = netlink_kernel_create(net, NETLINK_AUDIT, &cfg);
+		if (!sk) {
+			if (net_eq(net, &init_net))
+				audit_panic("cannot initialize netlink socket");
+			return -1;
+		}
+		sk->sk_sndtimeo = MAX_SCHEDULE_TIMEOUT;
+		ns->audit.sock = sk;
+		/*
+		 * Get reference of net->passive, force this netns
+		 * to be alive until we destroy the userns which
+		 * creates this netns.
+		 */
+		atomic_inc(&net->passive);
+	}
+
+	return 0;
+}
+
+static struct pernet_operations audit_net_ops = {
+	.init = audit_net_init,
+};
+
 /* Initialize audit support at boot time. */
 static int __init audit_init(void)
 {
 	int i;
-	struct netlink_kernel_cfg cfg = {
-		.input	= audit_receive,
-	};
 
 	if (audit_initialized == AUDIT_DISABLED)
 		return 0;
 
 	printk(KERN_INFO "audit: initializing netlink socket (%s)\n",
 	       audit_default ? "enabled" : "disabled");
-	audit_sock = netlink_kernel_create(&init_net, NETLINK_AUDIT, &cfg);
-	if (!audit_sock)
-		audit_panic("cannot initialize netlink socket");
-	else
-		audit_sock->sk_sndtimeo = MAX_SCHEDULE_TIMEOUT;
+
+	if (register_pernet_subsys(&audit_net_ops) < 0)
+		return -1;
 
 	skb_queue_head_init(&audit_skb_queue);
 	skb_queue_head_init(&audit_skb_hold_queue);
@@ -1662,7 +1703,7 @@ void audit_log_end(struct audit_buffer *ab)
 		struct nlmsghdr *nlh = nlmsg_hdr(ab->skb);
 		nlh->nlmsg_len = ab->skb->len - NLMSG_HDRLEN;
 
-		if (audit_pid) {
+		if (audit_pid && init_user_ns.audit.sock) {
 			skb_queue_tail(&audit_skb_queue, ab->skb);
 			wake_up_interruptible(&kauditd_wait);
 		} else {
@@ -1726,7 +1767,20 @@ void audit_log_secctx(struct audit_buffer *ab, u32 secid)
 EXPORT_SYMBOL(audit_log_secctx);
 #endif
 
+void audit_free_user_ns(struct user_namespace *ns)
+{
+	if (audit_initialized == AUDIT_DISABLED)
+		return;
+
+	if (ns->audit.sock) {
+		struct net *net = sock_net(ns->audit.sock);
+		netlink_kernel_release(ns->audit.sock);
+		net_drop_ns(net);
+	}
+}
+
 EXPORT_SYMBOL(audit_log_start);
 EXPORT_SYMBOL(audit_log_end);
 EXPORT_SYMBOL(audit_log_format);
 EXPORT_SYMBOL(audit_log);
+EXPORT_SYMBOL(audit_free_user_ns);
