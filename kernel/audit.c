@@ -895,6 +895,11 @@ static void audit_receive(struct sk_buff  *skb)
 	mutex_unlock(&audit_cmd_mutex);
 }
 
+static bool audit_compare(struct net *net, struct sock *sk)
+{
+	return (sock_net(sk)->user_ns == net->user_ns);
+}
+
 static int __net_init audit_net_init(struct net *net)
 {
 	struct user_namespace *ns = net->user_ns;
@@ -907,6 +912,7 @@ static int __net_init audit_net_init(struct net *net)
 		 */
 		struct netlink_kernel_cfg cfg = {
 			.input	= audit_receive,
+			.compare = audit_compare,
 		};
 
 		sk = netlink_kernel_create(net, NETLINK_AUDIT, &cfg);
