@@ -450,7 +450,8 @@ extern int audit_filter_user(int type);
 extern int audit_filter_type(int type);
 extern int  audit_receive_filter(int type, int pid, int seq,
 				void *data, size_t datasz);
-extern int audit_enabled;
+#define audit_enabled (init_user_ns.audit.enabled)
+#define audit_enabled_ns(ns) (ns->audit.enabled)
 #else /* CONFIG_AUDIT */
 static inline __printf(4, 5)
 void audit_log(struct audit_context *ctx, gfp_t gfp_mask, int type,
@@ -503,6 +504,7 @@ static inline void audit_set_user_ns(struct user_namespace *ns)
 static inline void audit_free_user_ns(struct user_namespace *ns)
 { }
 #define audit_enabled 0
+#define audit_enabled_ns(ns) 0
 #endif /* CONFIG_AUDIT */
 static inline void audit_log_string(struct audit_buffer *ab, const char *buf)
 {
