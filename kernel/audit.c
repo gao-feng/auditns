@@ -245,13 +245,14 @@ void audit_log_lost(const char *message)
 	}
 }
 
-static int audit_log_config_change(char *function_name, int new, int old,
+static int audit_log_config_change(struct user_namespace *ns,
+				   char *function_name, int new, int old,
 				   int allow_changes)
 {
 	struct audit_buffer *ab;
 	int rc = 0;
 
-	ab = audit_log_start(NULL, GFP_KERNEL, AUDIT_CONFIG_CHANGE);
+	ab = audit_log_start_ns(ns, NULL, GFP_KERNEL, AUDIT_CONFIG_CHANGE);
 	if (unlikely(!ab))
 		return rc;
 	audit_log_format(ab, "%s=%d old=%d", function_name, new, old);
@@ -260,7 +261,7 @@ static int audit_log_config_change(char *function_name, int new, int old,
 	if (rc)
 		allow_changes = 0; /* Something weird, deny request */
 	audit_log_format(ab, " res=%d", allow_changes);
-	audit_log_end(ab);
+	audit_log_end_ns(ns, ab);
 	return rc;
 }
 
@@ -276,7 +277,8 @@ static int audit_do_config_change(char *function_name, int *to_change, int new)
 		allow_changes = 1;
 
 	if (ns->audit.enabled != AUDIT_OFF) {
-		rc = audit_log_config_change(function_name, new, old, allow_changes);
+		rc = audit_log_config_change(ns, function_name, new,
+					     old, allow_changes);
 		if (rc)
 			allow_changes = 0;
 	}
@@ -711,7 +713,8 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			int new_pid = status_get->pid;
 
 			if (ns->audit.enabled != AUDIT_OFF)
-				audit_log_config_change("audit_pid", new_pid,
+				audit_log_config_change(ns, "audit_pid",
+							new_pid,
 							ns->audit.pid, 1);
 			ns->audit.pid = new_pid;
 			ns->audit.portid = NETLINK_CB(skb).portid;
