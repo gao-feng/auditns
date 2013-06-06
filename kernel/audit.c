@@ -146,6 +146,7 @@ struct audit_buffer {
 struct audit_reply {
 	int pid;
 	struct sk_buff *skb;
+	struct user_namespace *ns;
 };
 
 static void audit_set_pid(struct audit_buffer *ab, pid_t pid)
@@ -532,8 +533,9 @@ static int audit_send_reply_thread(void *arg)
 
 	/* Ignore failure. It'll only happen if the sender goes away,
 	   because our timeout is set to infinite. */
-	netlink_unicast(init_user_ns.audit.sock, reply->skb,
+	netlink_unicast(reply->ns->audit.sock, reply->skb,
 			reply->pid, 0);
+	put_user_ns(reply->ns);
 	kfree(reply);
 	return 0;
 }
@@ -572,11 +574,13 @@ static int audit_send_reply(int pid, int seq, int type, int done, int multi,
 
 	reply->pid = pid;
 	reply->skb = skb;
+	reply->ns = get_user_ns(current_user_ns());
 
 	tsk = kthread_run(audit_send_reply_thread, reply, "audit_send_reply");
 	if (!IS_ERR(tsk))
 		return 0;
 	kfree_skb(skb);
+	put_user_ns(reply->ns);
 out:
 	kfree(reply);
 	return ret;
@@ -833,7 +837,7 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 				security_release_secctx(ctx, len);
 			return -ENOMEM;
 		}
-		sig_data->uid = from_kuid(&init_user_ns, audit_sig_uid);
+		sig_data->uid = from_kuid(ns, audit_sig_uid);
 		sig_data->pid = audit_sig_pid;
 		if (audit_sig_sid) {
 			memcpy(sig_data->ctx, ctx, len);
