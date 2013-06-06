@@ -27,6 +27,7 @@ struct audit_ctrl {
 	struct sk_buff_head	queue;
 	struct sk_buff_head	hold_queue;
 	struct task_struct	*kauditd_task;
+	bool			ever_enabled;
 };
 #endif
 

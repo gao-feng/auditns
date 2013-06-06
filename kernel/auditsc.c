@@ -938,8 +938,11 @@ int audit_alloc(struct task_struct *tsk)
 	struct audit_context *context;
 	enum audit_state     state;
 	char *key = NULL;
+	struct user_namespace *ns = current_user_ns();
+	/* Use current_user_ns, since this new task may run
+	 * in new user namespace */
 
-	if (likely(!audit_ever_enabled))
+	if (likely(!ns->audit.ever_enabled))
 		return 0; /* Return if not auditing. */
 
 	state = audit_filter_task(tsk, &key);

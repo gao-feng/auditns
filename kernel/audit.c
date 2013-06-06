@@ -78,7 +78,6 @@ static int	audit_initialized;
 #define AUDIT_OFF	0
 #define AUDIT_ON	1
 #define AUDIT_LOCKED	2
-bool		audit_ever_enabled;
 
 /* Default state when kernel boots without any parameters. */
 static int	audit_default;
@@ -313,7 +312,7 @@ static int audit_set_enabled(struct user_namespace *ns, int state)
 	rc =  audit_do_config_change("audit_enabled", &ns->audit.enabled,
 				     state);
 	if (!rc)
-		audit_ever_enabled |= !!state;
+		ns->audit.ever_enabled |= !!state;
 
 	return rc;
 }
@@ -965,7 +964,6 @@ static int __init audit_init(void)
 
 	audit_set_user_ns(&init_user_ns);
 	audit_initialized = AUDIT_INITIALIZED;
-	audit_ever_enabled |= !!audit_default;
 
 	audit_log(NULL, GFP_KERNEL, AUDIT_KERNEL, "initialized");
 
@@ -987,7 +985,7 @@ static int __init audit_enable(char *str)
 
 	if (audit_initialized == AUDIT_INITIALIZED) {
 		init_user_ns.audit.enabled = audit_default;
-		audit_ever_enabled |= !!audit_default;
+		init_user_ns.audit.ever_enabled |= !!audit_default;
 	} else if (audit_initialized == AUDIT_UNINITIALIZED) {
 		printk(" (after initialization)");
 	} else {
@@ -1792,6 +1790,7 @@ void audit_set_user_ns(struct user_namespace *ns)
 	skb_queue_head_init(&ns->audit.queue);
 	skb_queue_head_init(&ns->audit.hold_queue);
 	ns->audit.enabled = audit_default;
+	ns->audit.ever_enabled |= !!audit_default;
 }
 
 void audit_free_user_ns(struct user_namespace *ns)
