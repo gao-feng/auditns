@@ -68,12 +68,12 @@
 
 #include "audit.h"
 
-/* No auditing will take place until audit_initialized == AUDIT_INITIALIZED.
+/* No auditing will take place until user namespace's
+ * audit.initialized == AUDIT_INITIALIZED.
  * (Initialization happens after skb_init is called.) */
 #define AUDIT_DISABLED		-1
 #define AUDIT_UNINITIALIZED	0
 #define AUDIT_INITIALIZED	1
-static int	audit_initialized;
 
 #define AUDIT_OFF	0
 #define AUDIT_ON	1
@@ -953,7 +953,7 @@ static int __init audit_init(void)
 {
 	int i;
 
-	if (audit_initialized == AUDIT_DISABLED)
+	if (init_user_ns.audit.initialized == AUDIT_DISABLED)
 		return 0;
 
 	printk(KERN_INFO "audit: initializing netlink socket (%s)\n",
@@ -963,7 +963,6 @@ static int __init audit_init(void)
 		return -1;
 
 	audit_set_user_ns(&init_user_ns);
-	audit_initialized = AUDIT_INITIALIZED;
 
 	audit_log(NULL, GFP_KERNEL, AUDIT_KERNEL, "initialized");
 
@@ -979,14 +978,14 @@ static int __init audit_enable(char *str)
 {
 	audit_default = !!simple_strtol(str, NULL, 0);
 	if (!audit_default)
-		audit_initialized = AUDIT_DISABLED;
+		init_user_ns.audit.initialized = AUDIT_DISABLED;
 
 	printk(KERN_INFO "audit: %s", audit_default ? "enabled" : "disabled");
 
-	if (audit_initialized == AUDIT_INITIALIZED) {
+	if (init_user_ns.audit.initialized == AUDIT_INITIALIZED) {
 		init_user_ns.audit.enabled = audit_default;
 		init_user_ns.audit.ever_enabled |= !!audit_default;
-	} else if (audit_initialized == AUDIT_UNINITIALIZED) {
+	} else if (init_user_ns.audit.initialized == AUDIT_UNINITIALIZED) {
 		printk(" (after initialization)");
 	} else {
 		printk(" (until reboot)");
@@ -1147,7 +1146,7 @@ struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
 	unsigned long timeout_start = jiffies;
 	struct sk_buff_head	*queue = &init_user_ns.audit.queue;
 
-	if (audit_initialized != AUDIT_INITIALIZED)
+	if (init_user_ns.audit.initialized != AUDIT_INITIALIZED)
 		return NULL;
 
 	if (unlikely(audit_filter_type(type)))
@@ -1784,18 +1783,20 @@ EXPORT_SYMBOL(audit_log_secctx);
 
 void audit_set_user_ns(struct user_namespace *ns)
 {
-	if (audit_initialized == AUDIT_DISABLED)
+	if (init_user_ns.audit.initialized == AUDIT_DISABLED)
 		return;
 
 	skb_queue_head_init(&ns->audit.queue);
 	skb_queue_head_init(&ns->audit.hold_queue);
 	ns->audit.enabled = audit_default;
 	ns->audit.ever_enabled |= !!audit_default;
+
+	ns->audit.initialized = AUDIT_INITIALIZED;
 }
 
 void audit_free_user_ns(struct user_namespace *ns)
 {
-	if (audit_initialized == AUDIT_DISABLED)
+	if (init_user_ns.audit.initialized == AUDIT_DISABLED)
 		return;
 
 	if (ns->audit.sock) {
