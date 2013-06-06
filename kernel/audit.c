@@ -131,8 +131,6 @@ static DEFINE_SPINLOCK(audit_freelist_lock);
 static int	   audit_freelist_count;
 static LIST_HEAD(audit_freelist);
 
-/* queue of skbs to send to auditd when/if it comes back */
-static struct sk_buff_head audit_skb_hold_queue;
 static struct task_struct *kauditd_task;
 static DECLARE_WAIT_QUEUE_HEAD(kauditd_wait);
 static DECLARE_WAIT_QUEUE_HEAD(audit_backlog_wait);
@@ -351,9 +349,11 @@ static int audit_set_failure(int state)
  */
 static void audit_hold_skb(struct sk_buff *skb)
 {
+	struct sk_buff_head *hold_queue = &init_user_ns.audit.hold_queue;
+
 	if (audit_default &&
-	    skb_queue_len(&audit_skb_hold_queue) < audit_backlog_limit)
-		skb_queue_tail(&audit_skb_hold_queue, skb);
+	    skb_queue_len(hold_queue) < audit_backlog_limit)
+		skb_queue_tail(hold_queue, skb);
 	else
 		kfree_skb(skb);
 }
@@ -414,17 +414,18 @@ static void kauditd_send_skb(struct sk_buff *skb)
 static void flush_hold_queue(void)
 {
 	struct sk_buff *skb;
+	struct sk_buff_head *hold_queue = &init_user_ns.audit.hold_queue;
 
 	if (!audit_default || !audit_pid || !init_user_ns.audit.sock)
 		return;
 
-	skb = skb_dequeue(&audit_skb_hold_queue);
+	skb = skb_dequeue(hold_queue);
 	if (likely(!skb))
 		return;
 
 	while (skb && audit_pid) {
 		kauditd_send_skb(skb);
-		skb = skb_dequeue(&audit_skb_hold_queue);
+		skb = skb_dequeue(hold_queue);
 	}
 
 	/*
@@ -956,7 +957,6 @@ static int __init audit_init(void)
 		return -1;
 
 	audit_set_user_ns(&init_user_ns);
-	skb_queue_head_init(&audit_skb_hold_queue);
 	audit_initialized = AUDIT_INITIALIZED;
 	audit_enabled = audit_default;
 	audit_ever_enabled |= !!audit_default;
@@ -1784,6 +1784,7 @@ void audit_set_user_ns(struct user_namespace *ns)
 		return;
 
 	skb_queue_head_init(&ns->audit.queue);
+	skb_queue_head_init(&ns->audit.hold_queue);
 }
 
 void audit_free_user_ns(struct user_namespace *ns)
@@ -1798,6 +1799,7 @@ void audit_free_user_ns(struct user_namespace *ns)
 	}
 
 	skb_queue_purge(&ns->audit.queue);
+	skb_queue_purge(&ns->audit.hold_queue);
 }
 
 EXPORT_SYMBOL(audit_log_start);

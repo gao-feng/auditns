@@ -22,6 +22,7 @@ struct uid_gid_map {	/* 64 bytes -- 1 cache line */
 struct audit_ctrl {
 	struct sock		*sock;
 	struct sk_buff_head	queue;
+	struct sk_buff_head	hold_queue;
 };
 #endif
 
