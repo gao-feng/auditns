@@ -94,7 +94,6 @@ static int	audit_failure = AUDIT_FAIL_PRINTK;
  * contains the pid of the auditd process and audit_nlk_portid contains
  * the portid to use to send netlink messages to that process.
  */
-int		audit_pid;
 static int	audit_nlk_portid;
 
 /* If audit_rate_limit is non-zero, limit the rate of sending audit records
@@ -131,7 +130,6 @@ static DEFINE_SPINLOCK(audit_freelist_lock);
 static int	   audit_freelist_count;
 static LIST_HEAD(audit_freelist);
 
-static struct task_struct *kauditd_task;
 static DECLARE_WAIT_QUEUE_HEAD(kauditd_wait);
 static DECLARE_WAIT_QUEUE_HEAD(audit_backlog_wait);
 
@@ -184,7 +182,7 @@ void audit_panic(const char *message)
 		break;
 	case AUDIT_FAIL_PANIC:
 		/* test audit_pid since printk is always losey, why bother? */
-		if (audit_pid)
+		if (&init_user_ns.audit.pid)
 			panic("audit: %s\n", message);
 		break;
 	}
@@ -386,9 +384,10 @@ static void kauditd_send_skb(struct sk_buff *skb)
 			      audit_nlk_portid, 0);
 	if (err < 0) {
 		BUG_ON(err != -ECONNREFUSED); /* Shouldn't happen */
-		printk(KERN_ERR "audit: *NO* daemon at audit_pid=%d\n", audit_pid);
+		printk(KERN_ERR "audit: *NO* daemon at audit_pid=%d\n",
+		       init_user_ns.audit.pid);
 		audit_log_lost("auditd disappeared\n");
-		audit_pid = 0;
+		init_user_ns.audit.pid = 0;
 		/* we might get lucky and get this in the next auditd */
 		audit_hold_skb(skb);
 	} else
@@ -411,19 +410,19 @@ static void kauditd_send_skb(struct sk_buff *skb)
  * in 5 years when I want to play with this again I'll see this
  * note and still have no friggin idea what i'm thinking today.
  */
-static void flush_hold_queue(void)
+static void flush_hold_queue(struct user_namespace *ns)
 {
 	struct sk_buff *skb;
-	struct sk_buff_head *hold_queue = &init_user_ns.audit.hold_queue;
+	struct sk_buff_head *hold_queue = &ns->audit.hold_queue;
 
-	if (!audit_default || !audit_pid || !init_user_ns.audit.sock)
+	if (!audit_default || !ns->audit.pid || !ns->audit.sock)
 		return;
 
 	skb = skb_dequeue(hold_queue);
 	if (likely(!skb))
 		return;
 
-	while (skb && audit_pid) {
+	while (skb && ns->audit.pid) {
 		kauditd_send_skb(skb);
 		skb = skb_dequeue(hold_queue);
 	}
@@ -438,18 +437,26 @@ static void flush_hold_queue(void)
 
 static int kauditd_thread(void *dummy)
 {
+	struct user_namespace *ns = dummy;
+
 	set_freezable();
 	while (!kthread_should_stop()) {
 		struct sk_buff *skb;
-		struct sk_buff_head *queue = &init_user_ns.audit.queue;
+		struct sk_buff_head *queue = &ns->audit.queue;
 		DECLARE_WAITQUEUE(wait, current);
 
-		flush_hold_queue();
+		/* Ok, We are the last user of this userns,
+		 * It's time to go. Kill kauditd thread and
+		 * release the userns. */
+		if (atomic_read(&ns->count) == 1)
+			break;
+
+		flush_hold_queue(ns);
 
 		skb = skb_dequeue(queue);
 		wake_up(&audit_backlog_wait);
 		if (skb) {
-			if (audit_pid && init_user_ns.audit.sock)
+			if (ns->audit.pid && ns->audit.sock)
 				kauditd_send_skb(skb);
 			else
 				audit_printk_skb(skb);
@@ -466,6 +473,8 @@ static int kauditd_thread(void *dummy)
 		__set_current_state(TASK_RUNNING);
 		remove_wait_queue(&kauditd_wait, &wait);
 	}
+
+	put_user_ns(ns);
 	return 0;
 }
 
@@ -658,13 +667,17 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	ns = current_user_ns();
 	/* As soon as there's any sign of userspace auditd,
 	 * start kauditd to talk to it */
-	if (!kauditd_task) {
-		kauditd_task = kthread_run(kauditd_thread, NULL, "kauditd");
-		if (IS_ERR(kauditd_task)) {
-			err = PTR_ERR(kauditd_task);
-			kauditd_task = NULL;
-			return err;
+	if (!ns->audit.kauditd_task) {
+		struct task_struct *tsk;
+
+		tsk = kthread_run(kauditd_thread,
+				  get_user_ns(ns), "kauditd");
+		if (IS_ERR(tsk)) {
+			put_user_ns(ns);
+			return PTR_ERR(tsk);
 		}
+
+		ns->audit.kauditd_task = tsk;
 	}
 	seq  = nlh->nlmsg_seq;
 	data = nlmsg_data(nlh);
@@ -673,7 +686,7 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 	case AUDIT_GET:
 		status_set.enabled	 = audit_enabled;
 		status_set.failure	 = audit_failure;
-		status_set.pid		 = audit_pid;
+		status_set.pid		 = ns->audit.pid;
 		status_set.rate_limit	 = audit_rate_limit;
 		status_set.backlog_limit = audit_backlog_limit;
 		status_set.lost		 = atomic_read(&audit_lost);
@@ -700,8 +713,9 @@ static int audit_receive_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
 			int new_pid = status_get->pid;
 
 			if (audit_enabled != AUDIT_OFF)
-				audit_log_config_change("audit_pid", new_pid, audit_pid, 1);
-			audit_pid = new_pid;
+				audit_log_config_change("audit_pid", new_pid,
+							ns->audit.pid, 1);
+			ns->audit.pid = new_pid;
 			audit_nlk_portid = NETLINK_CB(skb).portid;
 		}
 		if (status_get->mask & AUDIT_STATUS_RATE_LIMIT) {
@@ -1714,7 +1728,7 @@ void audit_log_end(struct audit_buffer *ab)
 		struct nlmsghdr *nlh = nlmsg_hdr(ab->skb);
 		nlh->nlmsg_len = ab->skb->len - NLMSG_HDRLEN;
 
-		if (audit_pid && init_user_ns.audit.sock) {
+		if (init_user_ns.audit.pid && init_user_ns.audit.sock) {
 			skb_queue_tail(&init_user_ns.audit.queue, ab->skb);
 			wake_up_interruptible(&kauditd_wait);
 		} else {

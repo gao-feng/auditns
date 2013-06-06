@@ -26,6 +26,7 @@
 #include <linux/sched.h>
 #include <linux/ptrace.h>
 #include <uapi/linux/audit.h>
+#include <linux/user_namespace.h>
 
 struct audit_sig_info {
 	uid_t		uid;

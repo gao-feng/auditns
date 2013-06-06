@@ -21,8 +21,10 @@ struct uid_gid_map {	/* 64 bytes -- 1 cache line */
 #ifdef CONFIG_AUDIT
 struct audit_ctrl {
 	struct sock		*sock;
+	int			pid;
 	struct sk_buff_head	queue;
 	struct sk_buff_head	hold_queue;
+	struct task_struct	*kauditd_task;
 };
 #endif
 
@@ -59,8 +61,17 @@ extern void free_user_ns(struct user_namespace *ns);
 
 static inline void put_user_ns(struct user_namespace *ns)
 {
-	if (ns && atomic_dec_and_test(&ns->count))
-		free_user_ns(ns);
+	if (ns) {
+		if (atomic_dec_and_test(&ns->count)) {
+			free_user_ns(ns);
+		} else if (atomic_read(&ns->count) == 1) {
+			/* If the last user of this userns is kauditd,
+			 * we should wake up the kauditd and let it kill
+			 * itself, Then this userns will be destroyed.*/
+			if (ns->audit.kauditd_task)
+				wake_up_process(ns->audit.kauditd_task);
+		}
+	}
 }
 
 struct seq_operations;
