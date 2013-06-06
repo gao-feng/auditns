@@ -295,6 +295,9 @@ static int audit_do_config_change(char *function_name, int *to_change, int new)
 
 static int audit_set_rate_limit(int limit)
 {
+	if (current_user_ns() != &init_user_ns)
+		return -EPERM;
+
 	return audit_do_config_change("audit_rate_limit", &audit_rate_limit, limit);
 }
 
