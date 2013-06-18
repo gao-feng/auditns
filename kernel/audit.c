@@ -303,6 +303,9 @@ static int audit_set_rate_limit(int limit)
 
 static int audit_set_backlog_limit(int limit)
 {
+	if (current_user_ns() != &init_user_ns)
+		return -EPERM;
+
 	return audit_do_config_change("audit_backlog_limit", &audit_backlog_limit, limit);
 }
 
