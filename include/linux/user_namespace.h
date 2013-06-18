@@ -5,6 +5,7 @@
 #include <linux/nsproxy.h>
 #include <linux/sched.h>
 #include <linux/err.h>
+#include <linux/skbuff.h>
 
 #define UID_GID_MAP_MAX_EXTENTS 5
 
@@ -20,6 +21,7 @@ struct uid_gid_map {	/* 64 bytes -- 1 cache line */
 #ifdef CONFIG_AUDIT
 struct audit_ctrl {
 	struct sock		*sock;
+	struct sk_buff_head	queue;
 };
 #endif
 

@@ -100,6 +100,7 @@ int create_user_ns(struct cred *new)
 
 	update_mnt_policy(ns);
 
+	audit_set_user_ns(ns);
 	return 0;
 }
 
