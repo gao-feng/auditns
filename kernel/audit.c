@@ -327,6 +327,9 @@ static int audit_set_failure(int state)
 	    && state != AUDIT_FAIL_PANIC)
 		return -EINVAL;
 
+	if (current_user_ns() != &init_user_ns)
+		return -EPERM;
+
 	return audit_do_config_change("audit_failure", &audit_failure, state);
 }
 
