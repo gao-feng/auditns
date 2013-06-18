@@ -404,10 +404,18 @@ extern __printf(4, 5)
 void audit_log(struct audit_context *ctx, gfp_t gfp_mask, int type,
 	       const char *fmt, ...);
 
-extern struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask, int type);
+extern struct audit_buffer *
+audit_log_start(struct audit_context *ctx, gfp_t gfp_mask, int type);
+
+extern struct audit_buffer *
+audit_log_start_ns(struct user_namespace *ns, struct audit_context *ctx,
+		   gfp_t gfp_mask, int type);
+
 extern __printf(2, 3)
 void audit_log_format(struct audit_buffer *ab, const char *fmt, ...);
 extern void		    audit_log_end(struct audit_buffer *ab);
+extern void		    audit_log_end_ns(struct user_namespace *ns,
+					     struct audit_buffer *ab);
 extern int		    audit_string_contains_control(const char *string,
 							  size_t len);
 extern void		    audit_log_n_hex(struct audit_buffer *ab,
@@ -457,8 +465,16 @@ static inline __printf(4, 5)
 void audit_log(struct audit_context *ctx, gfp_t gfp_mask, int type,
 	       const char *fmt, ...)
 { }
-static inline struct audit_buffer *audit_log_start(struct audit_context *ctx,
-						   gfp_t gfp_mask, int type)
+static inline
+struct audit_buffer *audit_log_start(struct audit_context *ctx,
+				     gfp_t gfp_mask, int type)
+{
+	return NULL;
+}
+static inline
+struct audit_buffer *audit_log_start_ns(struct user_namespace *ns,
+					struct audit_context *ctx,
+					gfp_t gfp_mask, int type)
 {
 	return NULL;
 }
@@ -466,6 +482,9 @@ static inline __printf(2, 3)
 void audit_log_format(struct audit_buffer *ab, const char *fmt, ...)
 { }
 static inline void audit_log_end(struct audit_buffer *ab)
+{ }
+static inline void audit_log_end_ns(struct user_namespace *ns,
+				    struct audit_buffer *ab)
 { }
 static inline void audit_log_n_hex(struct audit_buffer *ab,
 				   const unsigned char *buf, size_t len)

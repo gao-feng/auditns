@@ -1112,47 +1112,35 @@ static inline void audit_get_stamp(struct audit_context *ctx,
 /*
  * Wait for auditd to drain the queue a little
  */
-static void wait_for_auditd(unsigned long sleep_time)
+static void wait_for_auditd(struct user_namespace *ns,
+			    unsigned long sleep_time)
 {
-	const struct sk_buff_head *queue = &init_user_ns.audit.queue;
+	const struct sk_buff_head *queue = &ns->audit.queue;
 	DECLARE_WAITQUEUE(wait, current);
 	set_current_state(TASK_UNINTERRUPTIBLE);
-	add_wait_queue(&init_user_ns.audit.backlog_wait, &wait);
+	add_wait_queue(&ns->audit.backlog_wait, &wait);
 
 	if (audit_backlog_limit &&
 	    skb_queue_len(queue) > audit_backlog_limit)
 		schedule_timeout(sleep_time);
 
 	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(&init_user_ns.audit.backlog_wait, &wait);
+	remove_wait_queue(&ns->audit.backlog_wait, &wait);
 }
 
-/**
- * audit_log_start - obtain an audit buffer
- * @ctx: audit_context (may be NULL)
- * @gfp_mask: type of allocation
- * @type: audit message type
- *
- * Returns audit_buffer pointer on success or NULL on error.
- *
- * Obtain an audit buffer.  This routine does locking to obtain the
- * audit buffer, but then no locking is required for calls to
- * audit_log_*format.  If the task (ctx) is a task that is currently in a
- * syscall, then the syscall is marked as auditable and an audit record
- * will be written at syscall exit.  If there is no associated task, then
- * task context (ctx) should be NULL.
- */
-struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
-				     int type)
+struct audit_buffer *audit_log_start_ns(struct user_namespace *ns,
+					struct audit_context *ctx,
+					gfp_t gfp_mask,
+					int type)
 {
 	struct audit_buffer	*ab	= NULL;
 	struct timespec		t;
 	unsigned int		uninitialized_var(serial);
 	int reserve;
 	unsigned long timeout_start = jiffies;
-	struct sk_buff_head	*queue = &init_user_ns.audit.queue;
+	struct sk_buff_head	*queue = &ns->audit.queue;
 
-	if (init_user_ns.audit.initialized != AUDIT_INITIALIZED)
+	if (ns->audit.initialized != AUDIT_INITIALIZED)
 		return NULL;
 
 	if (unlikely(audit_filter_type(type)))
@@ -1172,7 +1160,7 @@ struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
 			sleep_time = timeout_start + audit_backlog_wait_time -
 					jiffies;
 			if ((long)sleep_time > 0)
-				wait_for_auditd(sleep_time);
+				wait_for_auditd(ns, sleep_time);
 			continue;
 		}
 		if (audit_rate_check() && printk_ratelimit())
@@ -1183,7 +1171,7 @@ struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
 			       audit_backlog_limit);
 		audit_log_lost("backlog limit exceeded");
 		audit_backlog_wait_time = audit_backlog_wait_overflow;
-		wake_up(&init_user_ns.audit.backlog_wait);
+		wake_up(&ns->audit.backlog_wait);
 		return NULL;
 	}
 
@@ -1198,6 +1186,28 @@ struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
 	audit_log_format(ab, "audit(%lu.%03lu:%u): ",
 			 t.tv_sec, t.tv_nsec/1000000, serial);
 	return ab;
+}
+
+
+/**
+ * audit_log_start - obtain an audit buffer
+ * @ctx: audit_context (may be NULL)
+ * @gfp_mask: type of allocation
+ * @type: audit message type
+ *
+ * Returns audit_buffer pointer on success or NULL on error.
+ *
+ * Obtain an audit buffer.  This routine does locking to obtain the
+ * audit buffer, but then no locking is required for calls to
+ * audit_log_*format.  If the task (ctx) is a task that is currently in a
+ * syscall, then the syscall is marked as auditable and an audit record
+ * will be written at syscall exit.  If there is no associated task, then
+ * task context (ctx) should be NULL.
+ */
+struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
+				     int type)
+{
+	return audit_log_start_ns(&init_user_ns, ctx, gfp_mask, type);
 }
 
 /**
@@ -1704,6 +1714,27 @@ out:
 	kfree(name);
 }
 
+void audit_log_end_ns(struct user_namespace *ns, struct audit_buffer *ab)
+{
+	if (!ab)
+		return;
+	if (!audit_rate_check()) {
+		audit_log_lost("rate limit exceeded");
+	} else {
+		struct nlmsghdr *nlh = nlmsg_hdr(ab->skb);
+		nlh->nlmsg_len = ab->skb->len - NLMSG_HDRLEN;
+
+		if (ns->audit.pid && ns->audit.sock) {
+			skb_queue_tail(&ns->audit.queue, ab->skb);
+			wake_up_interruptible(&ns->audit.kauditd_wait);
+		} else {
+			audit_printk_skb(ns, ab->skb);
+		}
+		ab->skb = NULL;
+	}
+	audit_buffer_free(ab);
+}
+
 /**
  * audit_log_end - end one audit record
  * @ab: the audit_buffer
@@ -1715,23 +1746,7 @@ out:
  */
 void audit_log_end(struct audit_buffer *ab)
 {
-	if (!ab)
-		return;
-	if (!audit_rate_check()) {
-		audit_log_lost("rate limit exceeded");
-	} else {
-		struct nlmsghdr *nlh = nlmsg_hdr(ab->skb);
-		nlh->nlmsg_len = ab->skb->len - NLMSG_HDRLEN;
-
-		if (init_user_ns.audit.pid && init_user_ns.audit.sock) {
-			skb_queue_tail(&init_user_ns.audit.queue, ab->skb);
-			wake_up_interruptible(&init_user_ns.audit.kauditd_wait);
-		} else {
-			audit_printk_skb(&init_user_ns, ab->skb);
-		}
-		ab->skb = NULL;
-	}
-	audit_buffer_free(ab);
+	audit_log_end_ns(&init_user_ns, ab);
 }
 
 /**
@@ -1818,7 +1833,9 @@ void audit_free_user_ns(struct user_namespace *ns)
 }
 
 EXPORT_SYMBOL(audit_log_start);
+EXPORT_SYMBOL(audit_log_start_ns);
 EXPORT_SYMBOL(audit_log_end);
+EXPORT_SYMBOL(audit_log_end_ns);
 EXPORT_SYMBOL(audit_log_format);
 EXPORT_SYMBOL(audit_log);
 EXPORT_SYMBOL(audit_set_user_ns);
