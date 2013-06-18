@@ -119,8 +119,6 @@ static DEFINE_SPINLOCK(audit_freelist_lock);
 static int	   audit_freelist_count;
 static LIST_HEAD(audit_freelist);
 
-static DECLARE_WAIT_QUEUE_HEAD(audit_backlog_wait);
-
 /* Serialize requests from userspace. */
 DEFINE_MUTEX(audit_cmd_mutex);
 
@@ -453,7 +451,7 @@ static int kauditd_thread(void *dummy)
 		flush_hold_queue(ns);
 
 		skb = skb_dequeue(queue);
-		wake_up(&audit_backlog_wait);
+		wake_up(&ns->audit.backlog_wait);
 		if (skb) {
 			if (ns->audit.pid && ns->audit.sock)
 				kauditd_send_skb(ns, skb);
@@ -1119,14 +1117,14 @@ static void wait_for_auditd(unsigned long sleep_time)
 	const struct sk_buff_head *queue = &init_user_ns.audit.queue;
 	DECLARE_WAITQUEUE(wait, current);
 	set_current_state(TASK_UNINTERRUPTIBLE);
-	add_wait_queue(&audit_backlog_wait, &wait);
+	add_wait_queue(&init_user_ns.audit.backlog_wait, &wait);
 
 	if (audit_backlog_limit &&
 	    skb_queue_len(queue) > audit_backlog_limit)
 		schedule_timeout(sleep_time);
 
 	__set_current_state(TASK_RUNNING);
-	remove_wait_queue(&audit_backlog_wait, &wait);
+	remove_wait_queue(&init_user_ns.audit.backlog_wait, &wait);
 }
 
 /**
@@ -1185,7 +1183,7 @@ struct audit_buffer *audit_log_start(struct audit_context *ctx, gfp_t gfp_mask,
 			       audit_backlog_limit);
 		audit_log_lost("backlog limit exceeded");
 		audit_backlog_wait_time = audit_backlog_wait_overflow;
-		wake_up(&audit_backlog_wait);
+		wake_up(&init_user_ns.audit.backlog_wait);
 		return NULL;
 	}
 
@@ -1799,6 +1797,7 @@ void audit_set_user_ns(struct user_namespace *ns)
 	ns->audit.enabled = audit_default;
 	ns->audit.ever_enabled |= !!audit_default;
 	init_waitqueue_head(&ns->audit.kauditd_wait);
+	init_waitqueue_head(&ns->audit.backlog_wait);
 
 	ns->audit.initialized = AUDIT_INITIALIZED;
 }

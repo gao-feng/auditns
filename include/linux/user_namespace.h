@@ -29,6 +29,7 @@ struct audit_ctrl {
 	struct sk_buff_head	hold_queue;
 	struct task_struct	*kauditd_task;
 	wait_queue_head_t	kauditd_wait;
+	wait_queue_head_t	backlog_wait;
 	bool			ever_enabled;
 };
 #endif
